@@ -11,6 +11,7 @@ import snapshotsRouter from "./service/snapshots.js";
 import galleryRouter from "./service/gallery.js";
 import llmTestRouter from "./service/llmTest.js";
 import preferencesRouter from "./service/preferences.js";
+import authRouter from "./service/auth.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./swagger.js";
 
@@ -74,6 +75,7 @@ app.use("/api/snapshots", snapshotsRouter);
 app.use("/api/gallery", galleryRouter);
 app.use("/api/llm-test", llmLimiter, llmTestRouter);
 app.use("/api/preferences", preferencesRouter);
+app.use("/api/auth", authRouter);
 
 async function migrate() {
   // ⚠️ 이 배열이 스키마의 단일 소스(source of truth)다. 앱은 부팅 시 이걸로 자급자족 부트스트랩한다.

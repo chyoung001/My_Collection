@@ -16,6 +16,9 @@ export const DEFAULT_PREFERENCES = {
   priceUpColor: "#4caf50",
   priceDownColor: "#f44336",
 
+  // 통화 환율 — 시세는 USD로 수집되므로, 비USD 표시는 이 환율로 환산한다 (1 USD 당).
+  exchangeRates: { KRW: 1350, JPY: 155 },
+
   // 데이터 수집
   cacheWindowHours: 1,           // 스냅샷 캐시 윈도우 (시간)
   portfolioChangeWindowHours: 6, // 변화율 계산 기준 (시간)

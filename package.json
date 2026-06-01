@@ -1,0 +1,27 @@
+{
+  "name": "my_collection_backend",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Backend API server for My Collection (card portfolio, PSA cert lookup, portfolio summary).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "set NODE_ENV=development&& node src/server.js",
+    "psa:token": "node scripts/fetchPsaToken.js",
+    "ollama:ping": "node scripts/pingOllama.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "openai": "^6.39.1",
+    "pg": "^8.13.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

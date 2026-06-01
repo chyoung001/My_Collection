@@ -1,0 +1,29 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets  ← .env에 PSA_TOKEN·OLLAMA_API_KEY·DB 비번이 들어있으므로 반드시 제외
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+
+# Scraper debug output (대용량 스크랩 HTML/JSON)
+debug/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code
+.claude/

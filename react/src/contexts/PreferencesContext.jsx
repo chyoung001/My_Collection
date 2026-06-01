@@ -10,6 +10,7 @@ const DEFAULTS = {
   goldTone: "#d4af37",
   priceUpColor: "#4caf50",
   priceDownColor: "#f44336",
+  exchangeRates: { KRW: 1350, JPY: 155 }, // 1 USD 당 환율 (시세는 USD로 수집됨)
   cacheWindowHours: 1,
   portfolioChangeWindowHours: 6,
 };
@@ -74,16 +75,20 @@ export function PreferencesProvider({ children }) {
     }).catch((e) => console.error("preferences reset 실패", e));
   }, []);
 
-  // 설정 기반 통화 포맷터
+  // 설정 기반 통화 포맷터.
+  // 입력값(v)은 항상 USD 기준(시세 수집 단위). 비USD 통화면 환율로 환산해 표시한다.
   const fmtMoney = useCallback((v) => {
     if (v == null || isNaN(Number(v))) return "—";
-    const symbol = CURRENCY_SYMBOLS[prefs.currency] ?? "$";
+    const cur = prefs.currency;
+    const rate = cur === "USD" ? 1 : Number(prefs.exchangeRates?.[cur]) || 1;
+    const converted = Number(v) * rate;
+    const symbol = CURRENCY_SYMBOLS[cur] ?? "$";
     const decimals = Number(prefs.currencyDecimals) || 0;
-    return symbol + Number(v).toLocaleString("en-US", {
+    return symbol + converted.toLocaleString("en-US", {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
     });
-  }, [prefs.currency, prefs.currencyDecimals]);
+  }, [prefs.currency, prefs.currencyDecimals, prefs.exchangeRates]);
 
   const value = { prefs, loaded, setPreference, resetPreferences, fmtMoney, DEFAULTS };
   return (

@@ -1,24 +1,60 @@
 const STORAGE_KEY = "my_collection_api_base";
+const TOKEN_KEY = "my_collection_api_token";
 const DEFAULT_BASE = "http://localhost:4000";
 
 export function getApiBase() {
+  // ?apiBase= 쿼리는 항상 우선하며, 이후 세션을 위해 영구 저장한다.
   const fromUrl = new URLSearchParams(window.location.search).get("apiBase");
   if (fromUrl) {
-    try {
-      sessionStorage.setItem(STORAGE_KEY, fromUrl);
-    } catch {}
-    return fromUrl;
+    setApiBase(fromUrl);
+    return normalizeBase(fromUrl);
   }
   try {
-    return sessionStorage.getItem(STORAGE_KEY) || DEFAULT_BASE;
+    return localStorage.getItem(STORAGE_KEY) || DEFAULT_BASE;
   } catch {
     return DEFAULT_BASE;
   }
 }
 
+function normalizeBase(url) {
+  return (url || "").trim().replace(/\/+$/, ""); // 끝 슬래시 제거 (base + path 중복 방지)
+}
+
+export function setApiBase(url) {
+  const v = normalizeBase(url);
+  try {
+    if (v) localStorage.setItem(STORAGE_KEY, v);
+    else localStorage.removeItem(STORAGE_KEY);
+  } catch {}
+  return v;
+}
+
+// API 토큰 — 쓰기 요청 인증용. 시크릿이므로 클라이언트 localStorage에만 보관(서버 prefs로 보내지 않음).
+export function getApiToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setApiToken(token) {
+  const v = (token || "").trim();
+  try {
+    if (v) localStorage.setItem(TOKEN_KEY, v);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+  return v;
+}
+
 export function apiFetch(path, opts = {}) {
   const base = getApiBase();
   const headers = new Headers(opts.headers);
+  // 토큰이 있으면 항상 첨부 — 안전 메서드(GET 등)는 백엔드가 무시하므로 무해하다.
+  const token = getApiToken();
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   if (/ngrok-free\.app|ngrok\.io|ngrok\.app/i.test(base)) {
     headers.set("ngrok-skip-browser-warning", "true");
   }
@@ -82,4 +118,25 @@ export function relTime(iso) {
   if (diff < 3600) return Math.floor(diff / 60) + "분 전";
   if (diff < 86400) return Math.floor(diff / 3600) + "시간 전";
   return Math.floor(diff / 86400) + "일 전";
+}
+
+// 외부 무료 환율 API (open.er-api.com — API 키 불필요, CORS 허용, 매일 갱신).
+// USD 기준 환율을 가져온다. 우리 백엔드가 아니므로 plain fetch 사용.
+export async function fetchExchangeRates(currencies = ["KRW", "JPY"]) {
+  let data;
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/USD");
+    data = await res.json();
+  } catch {
+    throw new ApiError("환율 서버에 연결할 수 없습니다. (네트워크 확인)", { code: "fx_network_error" });
+  }
+  if (data?.result !== "success" || !data?.rates) {
+    throw new ApiError("환율 데이터를 가져올 수 없습니다.", { code: "fx_bad_response" });
+  }
+  const rates = {};
+  for (const c of currencies) {
+    const v = data.rates[c];
+    if (typeof v === "number") rates[c] = Math.round(v * 100) / 100; // 소수점 2자리
+  }
+  return { rates, updatedUnix: data.time_last_update_unix };
 }

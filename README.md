@@ -37,7 +37,7 @@
 > 포트폴리오 가치 추이(고정 바스켓) 차트, 등급 분포 도넛, 미실현 손익, Top Performers를 한 화면에서 확인합니다.
 
 <p align="center">
-  <img src="docs/Screenshot/대쉬보드.png" width="100%"/>
+  <img src="docs/Screenshot/메인.png" width="100%"/>
 </p>
 
 ---
@@ -50,6 +50,9 @@
 
 <p align="center">
   <img src="docs/Screenshot/컬랙션.png" width="100%"/>
+</p>
+<p align="center">
+  <img src="docs/Screenshot/카드추가.png" width="60%"/>
 </p>
 
 ---
@@ -79,6 +82,10 @@
 > 카드를 삭제하지 않고 **판매 처리**(판매가·메모)하면 보유 목록에서 빠져 **Sold / Archive**로 이동합니다.
 > 보유분의 **미실현 손익**과 판매분의 **실현 손익**을 분리해 집계하여 실제 수익을 추적합니다.
 
+<p align="center">
+  <img src="docs/Screenshot/판매.png" width="100%"/>
+</p>
+
 ---
 
 ### AI 컬렉션 어시스턴트 (AI Assistant)
@@ -86,6 +93,20 @@
 > 내 컬렉션 데이터(가치 · 손익 · 등급 분포 · 시세 미수집 카드 등)를 서버에서 미리 집계해 근거로 제공하고,
 > **2단계 모델 파이프라인**(추론 `kimi-k2.6` → 답변 `gemma4`)이 한국어로 답하는 채팅 · 인사이트 기능입니다.
 > 모든 수치는 서버에서 선계산해 모델은 인용만 하도록 그라운딩합니다. (Ollama Cloud · SSE 스트리밍)
+
+<p align="center">
+  <img src="docs/Screenshot/AI어시스턴트.png" width="100%"/>
+</p>
+
+---
+
+### 설정 (Settings)
+
+> 통화·환율, 시세 표시, 외부 연동, API 토큰 등 앱 동작을 탭으로 구성해 관리합니다.
+
+<p align="center">
+  <img src="docs/Screenshot/설정.png" width="100%"/>
+</p>
 
 <br/>
 

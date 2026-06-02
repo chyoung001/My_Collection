@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../utils/db.js";
 import { scrape130point } from "../utils/pointScraper.js";
+import { scrapePsaCert, toSnapshotResult } from "../utils/psaScraper.js";
 import { sendError } from "../utils/httpError.js";
 import { getPreference } from "../utils/preferences.js";
 
@@ -158,7 +159,10 @@ router.get("/:cardId/history", async (req, res) => {
          items->'confidence'             AS "confidence",
          items->>'priceSource'           AS "priceSource",
          items->'lastSale'               AS "lastSale",
-         items->>'representativePrice'   AS "representativePrice"
+         items->>'representativePrice'   AS "representativePrice",
+         items->'estimateRange'          AS "estimateRange",
+         items->>'source'                AS "source",
+         items->'population'             AS "population"
        FROM market_snapshots
        WHERE card_id = $1
        ORDER BY fetched_at DESC
@@ -205,7 +209,7 @@ router.post("/:cardId/fetch", async (req, res) => {
   let card;
   try {
     const { rows } = await pool.query(
-      `SELECT id, subject, year, set_name, card_number, variety, grader, grade, is_rare
+      `SELECT id, subject, year, set_name, card_number, variety, grader, grade, is_rare, cert_number
        FROM cards WHERE id = $1`,
       [cardId]
     );
@@ -246,6 +250,7 @@ router.post("/:cardId/fetch", async (req, res) => {
           cardId,
           cached: true,
           cachedAgeSeconds: ageSec,
+          source:              snap.items?.source ?? "130point",
           query:               snap.query,
           representativePrice: snap.items?.representativePrice != null
             ? Number(snap.items.representativePrice) : null,
@@ -260,6 +265,8 @@ router.post("/:cardId/fetch", async (req, res) => {
           lastSale:            snap.items?.lastSale ?? null,
           confidence:          snap.items?.confidence ?? null,
           filterStats:         snap.items?.filterStats ?? null,
+          population:          snap.items?.population ?? null,
+          estimateRange:       snap.items?.estimateRange ?? null,
         });
       }
     } catch (err) {
@@ -268,13 +275,37 @@ router.post("/:cardId/fetch", async (req, res) => {
     }
   }
 
-  // 130point 스크래핑
+  // 시세 수집: PSA 등급 카드는 PSA Estimate 우선, 없으면 130point 폴백.
+  // psaData는 estimate 유무와 무관하게 Population 갱신에 재사용한다(같은 1회 스크래핑에서 얻음).
   let result;
-  try {
-    result = await scrape130point(card);
-  } catch (err) {
-    console.error(`fetch: 스크래핑 실패 card_id=${cardId}`, err.message);
-    return sendError(res, 502, "scraping_failed");
+  let psaData = null;
+  const isPsaCard = card.grader === "PSA" && card.cert_number;
+  if (isPsaCard) {
+    try {
+      psaData = await scrapePsaCert(card);
+      result = toSnapshotResult(psaData, card); // estimate 없으면 null
+      if (result) {
+        console.log(
+          `[fetch] card_id=${cardId} PSA Estimate=$${result.representativePrice} ` +
+          `(${result.confidence.psaConfidence ?? "?"})`
+        );
+      } else {
+        console.log(`[fetch] card_id=${cardId} PSA Estimate 없음 → 130point 폴백`);
+      }
+    } catch (err) {
+      console.warn(`[fetch] PSA 스크래핑 실패 card_id=${cardId} → 130point 폴백:`, err.message);
+    }
+  }
+
+  // PSA에서 가격을 못 얻었으면 130point 스크래핑
+  if (!result) {
+    try {
+      result = await scrape130point(card);
+      result.source = "130point";
+    } catch (err) {
+      console.error(`fetch: 스크래핑 실패 card_id=${cardId}`, err.message);
+      return sendError(res, 502, "scraping_failed");
+    }
   }
 
   // market_snapshots 저장 + cards.current_price 갱신을 트랜잭션으로 묶음.
@@ -302,6 +333,11 @@ router.post("/:cardId/fetch", async (req, res) => {
           priceSource: result.priceSource,
           lastSale: result.lastSale,
           representativePrice: result.representativePrice,
+          source: result.source ?? "130point",
+          population: result.population ?? (psaData
+            ? { totalPopulation: psaData.totalPopulation, populationHigher: psaData.populationHigher }
+            : null),
+          estimateRange: result.estimateRange ?? null,
         }),
       ]
     );
@@ -315,6 +351,22 @@ router.post("/:cardId/fetch", async (req, res) => {
         [repPrice, cardId]
       );
     }
+
+    // PSA 페이지를 긁었으면 Population도 함께 갱신(estimate 유무·폴백 여부와 무관).
+    // 키는 등록 시 PSA API가 채운 컨벤션(PascalCase)에 맞추고, jsonb 병합(||)으로
+    // 기존의 다른 필드(TotalPopulationWithQualifier 등)는 보존한다.
+    if (psaData && (psaData.totalPopulation != null || psaData.populationHigher != null)) {
+      const popPatch = {};
+      if (psaData.totalPopulation != null) popPatch.TotalPopulation = psaData.totalPopulation;
+      if (psaData.populationHigher != null) popPatch.PopulationHigher = psaData.populationHigher;
+      await client.query(
+        `UPDATE cards
+           SET psa_population = COALESCE(psa_population, '{}'::jsonb) || $1::jsonb,
+               updated_at = NOW()
+         WHERE id = $2`,
+        [JSON.stringify(popPatch), cardId]
+      );
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -325,13 +377,14 @@ router.post("/:cardId/fetch", async (req, res) => {
   }
 
   console.log(
-    `[fetch] card_id=${cardId} "${result.query}" → ` +
+    `[fetch] card_id=${cardId} [${result.source ?? "130point"}] "${result.query}" → ` +
     `${result.priceSource}=$${result.representativePrice ?? "—"} ` +
-    `(${result.saleCount}건, ${result.confidence?.level ?? "?"})`
+    `(${result.saleCount != null ? `${result.saleCount}건, ` : ""}${result.confidence?.level ?? "?"})`
   );
 
   res.json({
     cardId,
+    source:              result.source ?? "130point",
     query:               result.query,
     representativePrice: result.representativePrice,
     priceSource:         result.priceSource,
@@ -345,6 +398,8 @@ router.post("/:cardId/fetch", async (req, res) => {
     lastSale:            result.lastSale,
     confidence:          result.confidence,
     filterStats:         result.filterStats,
+    population:          result.population ?? null,
+    estimateRange:       result.estimateRange ?? null,
     _debug:              result._raw ? { rawHtml: result._raw } : undefined,
   });
 });

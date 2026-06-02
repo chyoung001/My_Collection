@@ -18,6 +18,8 @@ const DEFAULT_MESSAGES = {
   unauthorized:           "인증이 필요합니다. (유효한 API 토큰을 제공하세요)",
   auth_not_configured:    "서버에 API_TOKEN이 설정되지 않아 변경 요청을 처리할 수 없습니다.",
   rate_limited:           "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  message_required:       "메시지를 입력해 주세요.",
+  assistant_error:        "AI 어시스턴트 응답 생성에 실패했습니다.",
 
   // 카드
   card_not_found:           "카드를 찾을 수 없습니다.",

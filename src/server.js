@@ -9,9 +9,9 @@ import cardsRouter from "./service/cards.js";
 import dashboardRouter from "./service/dashboard.js";
 import snapshotsRouter from "./service/snapshots.js";
 import galleryRouter from "./service/gallery.js";
-import llmTestRouter from "./service/llmTest.js";
 import preferencesRouter from "./service/preferences.js";
 import authRouter from "./service/auth.js";
+import assistantRouter from "./service/assistant.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./swagger.js";
 import { sendError } from "./utils/httpError.js";
@@ -75,9 +75,17 @@ app.use("/api/cards", cardsRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/snapshots", snapshotsRouter);
 app.use("/api/gallery", galleryRouter);
-app.use("/api/llm-test", llmLimiter, llmTestRouter);
+app.use("/api/assistant", llmLimiter, assistantRouter);
 app.use("/api/preferences", preferencesRouter);
 app.use("/api/auth", authRouter);
+
+// --- 매칭되지 않은 /api 경로 → JSON 404 ---
+// 라우터를 통과했는데 아무 핸들러도 매칭되지 않으면 Express 기본 404(HTML)가 반환된다.
+// 나머지 API와 동일한 JSON 봉투({error, message})로 통일하고, 어떤 경로가 없는지 메시지에 담아
+// 디버깅(예: 백엔드 미재시작으로 신규 라우트 미반영)을 쉽게 한다.
+app.use("/api", (req, res) =>
+  sendError(res, 404, "not_found", { message: `${req.method} ${req.originalUrl} 경로를 찾을 수 없습니다.` })
+);
 
 // --- 전역 에러 핸들러 (모든 라우터 뒤에 위치해야 함) ---
 // Express 기본 핸들러는 HTML(개발 시 스택 트레이스 포함)을 반환하므로, 나머지 API와 동일한

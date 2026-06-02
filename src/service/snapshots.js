@@ -4,8 +4,14 @@ import { scrape130point } from "../utils/pointScraper.js";
 import { scrapePsaCert, toSnapshotResult } from "../utils/psaScraper.js";
 import { sendError } from "../utils/httpError.js";
 import { getPreference } from "../utils/preferences.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { rateLimit } from "../utils/rateLimit.js";
 
 const router = Router();
+
+// 비용 발생 엔드포인트(POST /:cardId/fetch) 전용 레이트리미터.
+// 일반 /api 리미터(300/분)와 별개로, ZenRows 유료 호출을 트리거하는 수집만 IP당 분당 10회로 제한.
+const fetchLimiter = rateLimit({ windowMs: 60_000, max: 10 });
 
 /**
  * @openapi
@@ -200,7 +206,7 @@ router.get("/:cardId/history", async (req, res) => {
  *       404:
  *         description: 카드를 찾을 수 없음
  */
-router.post("/:cardId/fetch", async (req, res) => {
+router.post("/:cardId/fetch", fetchLimiter, asyncHandler(async (req, res) => {
   const cardId = parseInt(req.params.cardId, 10);
   if (!cardId || isNaN(cardId)) return sendError(res, 400, "invalid_card_id");
   const force = req.query.force === "1" || req.query.force === "true";
@@ -227,7 +233,14 @@ router.post("/:cardId/fetch", async (req, res) => {
 
   // 캐싱: 설정된 윈도우(기본 1시간) 안에 수집된 스냅샷이 있으면 ZenRows 호출 안 하고 그것을 반환.
   // ZenRows 크레딧 소모 방지가 목적. ?force=1로 우회 가능.
-  const cacheWindowHours = Number(await getPreference("cacheWindowHours")) || 1;
+  // getPreference 실패(DB 일시 장애 등)는 치명적이지 않으므로 기본값으로 폴백한다.
+  // (try/catch 밖에서 await가 reject되면 Express 4는 응답을 못 보내 요청이 멈춘다 — hang.)
+  let cacheWindowHours = 1;
+  try {
+    cacheWindowHours = Number(await getPreference("cacheWindowHours")) || 1;
+  } catch (err) {
+    console.warn("fetch: cacheWindowHours 조회 실패, 기본값 1h 사용", err.message);
+  }
   const CACHE_WINDOW_MS = cacheWindowHours * 60 * 60 * 1000;
   if (!force) {
     try {
@@ -273,6 +286,24 @@ router.post("/:cardId/fetch", async (req, res) => {
       // 캐시 조회 실패는 치명적이지 않으므로 로그만 남기고 진행
       console.warn("fetch: 캐시 조회 실패 (계속 진행)", err.message);
     }
+  }
+
+  // 일일 수집 상한 — ?force=1 로도 우회 불가(ZenRows 비용 폭주 방지).
+  // 여기 도달 = 캐시 미스/force → 실제 스크래핑(유료) 예정. '오늘 저장된 스냅샷 수'를
+  // 프록시 지표로 사용한다(스크래핑 1회 ≈ 스냅샷 1행; PSA→130point 2콜 폴백은 1행이라 약간 관대).
+  const dailyCap = Number(process.env.ZENROWS_DAILY_CAP) || 50;
+  try {
+    const { rows: usage } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM market_snapshots
+       WHERE fetched_at >= date_trunc('day', NOW())`
+    );
+    if (usage[0].n >= dailyCap) {
+      console.warn(`[fetch] 일일 수집 상한(${dailyCap}) 도달 — card_id=${cardId} 차단`);
+      return sendError(res, 429, "daily_scrape_limit", { limit: dailyCap });
+    }
+  } catch (err) {
+    // 상한 카운트 조회 실패는 치명적이지 않음 — 검사를 건너뛰고 진행(가용성 우선)
+    console.warn("fetch: 일일 상한 카운트 실패 (검사 생략)", err.message);
   }
 
   // 시세 수집: PSA 등급 카드는 PSA Estimate 우선, 없으면 130point 폴백.
@@ -402,6 +433,6 @@ router.post("/:cardId/fetch", async (req, res) => {
     estimateRange:       result.estimateRange ?? null,
     _debug:              result._raw ? { rawHtml: result._raw } : undefined,
   });
-});
+}));
 
 export default router;

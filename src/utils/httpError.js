@@ -12,6 +12,7 @@ const DEFAULT_MESSAGES = {
   missing_required_fields: "필수 항목이 비어있습니다.",
   not_found:              "찾을 수 없습니다.",
   internal_error:         "서버 오류가 발생했습니다.",
+  cors_forbidden:         "허용되지 않은 출처(Origin)에서의 요청입니다.",
 
   // 인증 / 레이트리밋
   unauthorized:           "인증이 필요합니다. (유효한 API 토큰을 제공하세요)",
@@ -53,6 +54,7 @@ const DEFAULT_MESSAGES = {
   // 시세
   invalid_card_id:        "유효하지 않은 카드 ID 입니다.",
   rare_card_blocked:      "희소 카드(1/1·SSP)는 자동 시세 수집 신뢰도가 낮습니다. ?force=1로 강제 수집 가능합니다.",
+  daily_scrape_limit:     "오늘의 시세 수집 한도에 도달했습니다. 내일 다시 시도해 주세요.",
   scraping_failed:        "시세 수집에 실패했습니다.",
   db_error:               "데이터베이스 오류가 발생했습니다.",
   db_save_error:          "데이터 저장에 실패했습니다.",

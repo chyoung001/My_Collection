@@ -20,7 +20,7 @@ export const DEFAULT_PREFERENCES = {
   exchangeRates: { KRW: 1350, JPY: 155 },
 
   // 데이터 수집
-  cacheWindowHours: 1,           // 스냅샷 캐시 윈도우 (시간)
+  cacheWindowHours: 12,          // 스냅샷 캐시 윈도우 (시간) — 같은 카드 재수집 시 ZenRows 호출 억제 (force=1로 우회)
   portfolioChangeWindowHours: 6, // 변화율 계산 기준 (시간)
 };
 

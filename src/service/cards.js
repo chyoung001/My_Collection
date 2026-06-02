@@ -262,6 +262,14 @@ router.post("/auto", async (req, res) => {
     const psaCert = psaLookup.PSACert || {};
     const psaPopulation = psaLookup.PSAPopulation || null;
 
+    // 저(低)Population 카드는 동일 등급 표본이 적어 시세 책정이 어렵다.
+    // 등록 시점에 무료 PSA API의 TotalPopulation(이 등급의 개체수)을 보고 임계값 이하이면
+    // 희소(is_rare)로 표시 → 자동 시세 수집을 건너뛴다(rare_card_blocked, force=1로 우회 가능).
+    // PSA API의 Population 값은 문자열("18")이라 parseInt 필요.
+    const RARE_POP_THRESHOLD = Number(process.env.RARE_POP_THRESHOLD) || 5;
+    const totalPop = parseInt(psaPopulation?.TotalPopulation, 10);
+    const isLowPop = Number.isFinite(totalPop) && totalPop <= RARE_POP_THRESHOLD;
+
     const normalizedPsaImages = Array.isArray(psaImages)
       ? psaImages
       : psaImages
@@ -276,9 +284,9 @@ router.post("/auto", async (req, res) => {
     const result = await pool.query(
       `INSERT INTO cards
        (subject, year, set_name, card_number, variety, category, grade, grader, cert_number, image_url,
-        certification_type, is_hologram, is_reverse_barcode, psa_cert, psa_population, psa_images, dna_cert)
+        certification_type, is_hologram, is_reverse_barcode, psa_cert, psa_population, psa_images, dna_cert, is_rare)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-               $11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb)
+               $11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18)
        RETURNING id`,
       [
         psaCert.Subject || "UNKNOWN",
@@ -298,9 +306,18 @@ router.post("/auto", async (req, res) => {
         toJsonb(psaPopulation),
         toJsonb(normalizedPsaImages),
         toJsonb(psaLookup.DNACert ?? null),
+        isLowPop,
       ]
     );
-    res.status(201).json({ id: result.rows[0].id });
+    if (isLowPop) {
+      console.log(`[auto] card ${result.rows[0].id} TotalPopulation=${totalPop}<=${RARE_POP_THRESHOLD} → 희소(is_rare) 자동 등록, 시세 수집 생략`);
+    }
+    res.status(201).json({
+      id: result.rows[0].id,
+      isRare: isLowPop,
+      totalPopulation: Number.isFinite(totalPop) ? totalPop : null,
+      ...(isLowPop ? { autoRareReason: "low_population" } : {}),
+    });
   } catch (err) {
     console.error("POST /api/cards/auto error", err);
     // 내부 에러 메시지를 클라이언트에 그대로 노출하지 않음 (토큰/스택 누출 위험).

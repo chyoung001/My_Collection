@@ -14,6 +14,7 @@ import preferencesRouter from "./service/preferences.js";
 import authRouter from "./service/auth.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./swagger.js";
+import { sendError } from "./utils/httpError.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -76,6 +77,19 @@ app.use("/api/gallery", galleryRouter);
 app.use("/api/llm-test", llmLimiter, llmTestRouter);
 app.use("/api/preferences", preferencesRouter);
 app.use("/api/auth", authRouter);
+
+// --- 전역 에러 핸들러 (모든 라우터 뒤에 위치해야 함) ---
+// Express 기본 핸들러는 HTML(개발 시 스택 트레이스 포함)을 반환하므로, 나머지 API와 동일한
+// JSON 봉투({error, message})로 통일한다. CORS origin 콜백의 Error, 라우터의 동기 throw,
+// asyncHandler가 next()로 넘긴 비동기 reject가 모두 여기로 모인다.
+app.use((err, req, res, _next) => {
+  if (res.headersSent) return _next(err);
+  const isCors = /^CORS:/.test(err?.message || "");
+  const status = err?.status || (isCors ? 403 : 500);
+  const code = err?.code || (isCors ? "cors_forbidden" : "internal_error");
+  console.error(`[error] ${req.method} ${req.originalUrl} →`, err?.message || err);
+  sendError(res, status, code);
+});
 
 async function migrate() {
   // ⚠️ 이 배열이 스키마의 단일 소스(source of truth)다. 앱은 부팅 시 이걸로 자급자족 부트스트랩한다.

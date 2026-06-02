@@ -45,6 +45,7 @@ router.get("/summary", async (req, res) => {
         COALESCE(SUM(current_price), 0)                           AS "totalValue",
         COUNT(*) FILTER (WHERE grade ~ '\\m10\\M')::int           AS "psa10Count"
       FROM cards
+      WHERE sold_at IS NULL
     `);
 
     const { rows: dist } = await pool.query(`
@@ -52,6 +53,7 @@ router.get("/summary", async (req, res) => {
         COALESCE(grade, 'N/A') AS grade,
         COUNT(*)::int          AS count
       FROM cards
+      WHERE sold_at IS NULL
       GROUP BY grade
       ORDER BY count DESC
     `);
@@ -122,7 +124,7 @@ router.get("/top-cards", async (req, res) => {
          current_price AS "currentPrice",
          image_url   AS "imageUrl"
        FROM cards
-       WHERE current_price IS NOT NULL
+       WHERE current_price IS NOT NULL AND sold_at IS NULL
        ORDER BY current_price DESC
        LIMIT $1`,
       [limit]
@@ -182,7 +184,7 @@ router.get("/top-gainer", async (_req, res) => {
         current_price AS "currentPrice",
         image_url     AS "imageUrl"
       FROM cards
-      WHERE current_price IS NOT NULL
+      WHERE current_price IS NOT NULL AND sold_at IS NULL
       ORDER BY current_price DESC
       LIMIT 1
     `);
@@ -193,6 +195,39 @@ router.get("/top-gainer", async (_req, res) => {
   } catch (err) {
     console.error("GET /api/dashboard/top-gainer error", err);
     sendError(res, 500, "failed_to_fetch_top_gainer");
+  }
+});
+
+/**
+ * @openapi
+ * /api/dashboard/realized:
+ *   get:
+ *     summary: 실현 손익 요약 (판매된 카드 기준)
+ *     tags:
+ *       - Dashboard
+ *     responses:
+ *       200:
+ *         description: 판매 카드 수, 총 판매대금, 실현 손익(구매가 있는 것만), 비율
+ */
+router.get("/realized", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE sold_at IS NOT NULL)::int                              AS "soldCount",
+        COALESCE(SUM(sold_price) FILTER (WHERE sold_at IS NOT NULL), 0)               AS "totalProceeds",
+        COALESCE(SUM(sold_price - purchase_price)
+                 FILTER (WHERE sold_at IS NOT NULL AND purchase_price IS NOT NULL), 0) AS "realizedGain",
+        COALESCE(SUM(purchase_price)
+                 FILTER (WHERE sold_at IS NOT NULL AND purchase_price IS NOT NULL), 0) AS "realizedCostBasis"
+      FROM cards
+    `);
+    const r = rows[0];
+    const cost = Number(r.realizedCostBasis);
+    const realizedPct = cost > 0 ? (Number(r.realizedGain) / cost) * 100 : null;
+    res.json({ ...r, realizedPct });
+  } catch (err) {
+    console.error("GET /api/dashboard/realized error", err);
+    sendError(res, 500, "failed_to_fetch_summary");
   }
 });
 

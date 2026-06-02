@@ -18,7 +18,12 @@ const router = Router();
  *       200:
  *         description: 카드 리스트를 반환합니다.
  */
-router.get("/", async (_req, res) => {
+router.get("/", async (req, res) => {
+  // status: active(기본)=보유중(sold_at IS NULL) / sold=판매됨 / all=전체
+  const status = req.query.status || "active";
+  const where = status === "sold" ? "WHERE sold_at IS NOT NULL"
+    : status === "all" ? ""
+    : "WHERE sold_at IS NULL";
   try {
     const result = await pool.query(
       `SELECT id, subject, year, set_name AS "setName", card_number AS "cardNumber",
@@ -31,10 +36,14 @@ router.get("/", async (_req, res) => {
               psa_population AS "psaPopulation",
               psa_images AS "psaImages",
               purchase_price AS "purchasePrice",
+              sold_at AS "soldAt",
+              sold_price AS "soldPrice",
+              sold_note AS "soldNote",
               is_rare AS "isRare",
               gallery_section_id AS "sectionId",
               gallery_order AS "galleryOrder"
        FROM cards
+       ${where}
        ORDER BY created_at DESC
        LIMIT 200`
     );
@@ -79,6 +88,9 @@ router.get("/:id", async (req, res) => {
               psa_population AS "psaPopulation",
               psa_images AS "psaImages",
               purchase_price AS "purchasePrice",
+              sold_at AS "soldAt",
+              sold_price AS "soldPrice",
+              sold_note AS "soldNote",
               is_rare AS "isRare",
               gallery_section_id AS "sectionId",
               gallery_order AS "galleryOrder"
@@ -409,6 +421,72 @@ router.patch("/:id/purchase-price", async (req, res) => {
   } catch (err) {
     console.error("PATCH /api/cards/:id/purchase-price error", err);
     sendError(res, 500, "failed_to_update_purchase_price");
+  }
+});
+
+/**
+ * @openapi
+ * /api/cards/{id}/sold:
+ *   patch:
+ *     summary: 카드 판매 등록 (sold_at + sold_price, 보유 → 판매됨)
+ *     tags:
+ *       - Cards
+ */
+router.patch("/:id/sold", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id || isNaN(id)) return sendError(res, 400, "invalid_id");
+  const { soldPrice, soldAt, soldNote } = req.body || {};
+
+  // 판매가 필수 (0은 허용, 빈값/NaN/음수는 거부)
+  if (soldPrice === null || soldPrice === undefined || soldPrice === "") {
+    return sendError(res, 400, "invalid_sold_price");
+  }
+  const price = Number(soldPrice);
+  if (isNaN(price) || price < 0) return sendError(res, 400, "invalid_sold_price");
+
+  // 판매일: ISO 문자열이면 그 날짜, 없으면 NOW()
+  const at = soldAt ? new Date(soldAt) : null;
+  if (at && isNaN(at.getTime())) return sendError(res, 400, "invalid_request");
+  const note = soldNote ? String(soldNote).slice(0, 255) : null;
+
+  try {
+    const result = await pool.query(
+      `UPDATE cards
+         SET sold_price = $1, sold_at = COALESCE($2, NOW()), sold_note = $3, updated_at = NOW()
+       WHERE id = $4
+       RETURNING id, sold_at AS "soldAt", sold_price AS "soldPrice"`,
+      [price, at, note, id]
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "card_not_found");
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error("PATCH /api/cards/:id/sold error", err);
+    sendError(res, 500, "failed_to_update_sold");
+  }
+});
+
+/**
+ * @openapi
+ * /api/cards/{id}/unsell:
+ *   patch:
+ *     summary: 판매 취소 (판매됨 → 보유, sold_* 초기화)
+ *     tags:
+ *       - Cards
+ */
+router.patch("/:id/unsell", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id || isNaN(id)) return sendError(res, 400, "invalid_id");
+  try {
+    const result = await pool.query(
+      `UPDATE cards SET sold_at = NULL, sold_price = NULL, sold_note = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    if (result.rows.length === 0) return sendError(res, 404, "card_not_found");
+    res.status(200).json({ id: result.rows[0].id });
+  } catch (err) {
+    console.error("PATCH /api/cards/:id/unsell error", err);
+    sendError(res, 500, "failed_to_unsell");
   }
 });
 

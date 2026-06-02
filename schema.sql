@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS cards (
 
   current_price  NUMERIC(12,2),
   purchase_price NUMERIC(12,2),
+  sold_at        TIMESTAMP WITH TIME ZONE,
+  sold_price     NUMERIC(12,2),
+  sold_note      VARCHAR(255),
   is_rare        BOOLEAN NOT NULL DEFAULT FALSE,
 
   gallery_section_id INTEGER,
@@ -40,6 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_cards_subject ON cards (subject);
 CREATE INDEX IF NOT EXISTS idx_cards_grader_grade ON cards (grader, grade);
 CREATE INDEX IF NOT EXISTS idx_cards_gallery_section
   ON cards (gallery_section_id, gallery_order);
+CREATE INDEX IF NOT EXISTS idx_cards_sold_at ON cards (sold_at);
 
 -- 기존 DB 마이그레이션용 ALTER (신규 설치 시 CREATE TABLE이 이미 포함하므로 IF NOT EXISTS/IF EXISTS로 안전하게 실행)
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS certification_type VARCHAR(20);
@@ -50,6 +54,9 @@ ALTER TABLE cards ADD COLUMN IF NOT EXISTS dna_cert JSONB;
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12,2);
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS is_rare BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS gallery_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS sold_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS sold_price NUMERIC(12,2);
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS sold_note VARCHAR(255);
 
 -- is_hologram / is_reverse_barcode: VARCHAR → BOOLEAN 마이그레이션 (멱등 — 과거 VARCHAR였던 DB에서만 변환,
 -- 이미 BOOLEAN이면 skip. 가드 없이 ALTER ... TYPE를 재실행하면 boolean IN (text) 오류가 났었다.)

@@ -36,6 +36,7 @@ router.get("/summary", async (_req, res) => {
         SELECT DISTINCT ON (card_id)
           card_id, avg_price, fetched_at
         FROM market_snapshots
+        WHERE card_id IN (SELECT id FROM cards WHERE sold_at IS NULL)
         ORDER BY card_id, fetched_at DESC
       ),
       prev AS (
@@ -43,6 +44,7 @@ router.get("/summary", async (_req, res) => {
           card_id, avg_price
         FROM market_snapshots
         WHERE fetched_at < NOW() - ($1 || ' milliseconds')::interval
+          AND card_id IN (SELECT id FROM cards WHERE sold_at IS NULL)
         ORDER BY card_id, fetched_at DESC
       )
       SELECT
@@ -102,6 +104,7 @@ router.get("/latest", async (_req, res) => {
         c.image_url     AS "imageUrl"
       FROM market_snapshots ms
       JOIN cards c ON c.id = ms.card_id
+      WHERE c.sold_at IS NULL
       ORDER BY ms.card_id, ms.fetched_at DESC
     `);
     // confidenceJson은 text → 파싱해서 객체로 내려보냄
@@ -123,6 +126,51 @@ router.get("/latest", async (_req, res) => {
 function safeJsonParse(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
+
+/**
+ * @openapi
+ * /api/snapshots/portfolio-history:
+ *   get:
+ *     summary: 포트폴리오 전체 가치 시계열 (각 시점에 카드별 마지막 가격을 합산)
+ *     tags:
+ *       - Snapshots
+ *     responses:
+ *       200:
+ *         description: "[{ t, value }] 시간순 — 각 시점의 포트폴리오 총 가치"
+ */
+router.get("/portfolio-history", async (_req, res) => {
+  try {
+    // 고정 바스켓: 각 카드의 '첫 가격'을 baseline에 넣고, 그 이후 재수집(가격 변동)만 선을 움직인다.
+    // → 카드를 하나씩 처음 수집하며 값이 쌓이는 '수집 진행률 착시'(ex. +382%)를 제거하고 실제 가치 변동만 표시.
+    //   value(t) = baseline(모든 카드의 첫 가격 합) + (t 이전까지 재수집들의 가격변동 누적합)
+    const { rows } = await pool.query(`
+      WITH priced AS (
+        SELECT card_id, fetched_at,
+               COALESCE((items->>'representativePrice')::numeric, avg_price) AS price
+        FROM market_snapshots
+        WHERE COALESCE((items->>'representativePrice')::numeric, avg_price) IS NOT NULL
+          AND card_id IN (SELECT id FROM cards WHERE sold_at IS NULL)
+      ),
+      seq AS (
+        SELECT card_id, fetched_at, price,
+               ROW_NUMBER() OVER (PARTITION BY card_id ORDER BY fetched_at) AS rn,
+               price - LAG(price) OVER (PARTITION BY card_id ORDER BY fetched_at) AS chg
+        FROM priced
+      ),
+      base AS (SELECT COALESCE(SUM(price), 0) AS v FROM seq WHERE rn = 1),
+      moves AS (SELECT fetched_at, CASE WHEN rn = 1 THEN 0 ELSE chg END AS move FROM seq)
+      SELECT fetched_at AS "t",
+             (SELECT v FROM base) + SUM(SUM(move)) OVER (ORDER BY fetched_at) AS "value"
+      FROM moves
+      GROUP BY fetched_at
+      ORDER BY fetched_at
+    `);
+    res.json(rows.map((r) => ({ t: r.t, value: Number(r.value) })));
+  } catch (err) {
+    console.error("GET /api/snapshots/portfolio-history error", err);
+    sendError(res, 500, "failed_to_fetch_history");
+  }
+});
 
 /**
  * @openapi
@@ -226,10 +274,10 @@ router.post("/:cardId/fetch", fetchLimiter, asyncHandler(async (req, res) => {
     return sendError(res, 500, "db_error");
   }
 
-  // 희소 카드(1/1·SSP)는 자동 수집이 거의 의미 없으므로 차단. ?force=1로 우회 가능.
-  if (card.is_rare && !force) {
-    return sendError(res, 409, "rare_card_blocked");
-  }
+  // 수집 정책: 1/1·저pop 같은 희소 카드도 차단하지 않는다(예전엔 rare_card_blocked로 막았음).
+  // PSA Estimate는 저pop에도 추정가를 주므로 일단 시도하고, 단계적으로 폴백한다:
+  //   ① PSA Estimate → ② 130point → ③ 둘 다 없으면 "가격정보 없음"(priceSource:none).
+  // is_rare는 이제 가격 흐름에 영향 없는 '희소 표시' 플래그일 뿐이다.
 
   // 캐싱: 설정된 윈도우(기본 1시간) 안에 수집된 스냅샷이 있으면 ZenRows 호출 안 하고 그것을 반환.
   // ZenRows 크레딧 소모 방지가 목적. ?force=1로 우회 가능.
@@ -328,7 +376,10 @@ router.post("/:cardId/fetch", fetchLimiter, asyncHandler(async (req, res) => {
     }
   }
 
-  // PSA에서 가격을 못 얻었으면 130point 스크래핑
+  // PSA에서 가격을 못 얻었으면 130point 스크래핑.
+  // 130point도 거래 데이터가 없으면 예외 throw가 아니라 priceSource:"none" /
+  // representativePrice:null 결과를 돌려준다 → 그대로 저장·응답하여 "가격정보 없음"으로 표시.
+  // (네트워크/ZenRows 오류만 502 scraping_failed.)
   if (!result) {
     try {
       result = await scrape130point(card);
@@ -431,7 +482,9 @@ router.post("/:cardId/fetch", fetchLimiter, asyncHandler(async (req, res) => {
     filterStats:         result.filterStats,
     population:          result.population ?? null,
     estimateRange:       result.estimateRange ?? null,
-    _debug:              result._raw ? { rawHtml: result._raw } : undefined,
+    // 디버그용 원본 HTML은 기본 미포함(DEBUG_SCRAPE=1일 때만). "거래 0건"도 _raw가 차서
+    // 프론트가 '파싱 실패'로 오인하던 문제 방지 + 스크래핑 내부 노출 차단.
+    _debug:              (process.env.DEBUG_SCRAPE === "1" && result._raw) ? { rawHtml: result._raw } : undefined,
   });
 }));
 

@@ -4,9 +4,9 @@ const navItems = [
   { to: "/dashboard", icon: "ri-dashboard-line", label: "Dashboard" },
   { to: "/collection", icon: "ri-stack-line", label: "My Collection" },
   { to: "/gallery", icon: "ri-gallery-line", label: "Gallery" },
-  { to: "/market-trends", icon: "ri-line-chart-line", label: "Market Trends" },
+  { to: "/hidden", icon: "ri-archive-line", label: "Sold / Archive" },
+  { to: "/assistant", icon: "ri-robot-2-line", label: "AI Assistant" },
   { to: "/settings", icon: "ri-settings-3-line", label: "Settings" },
-  { to: "/llm-test", icon: "ri-robot-line", label: "LLM Test", badge: "DEV" },
 ];
 
 export default function Sidebar() {

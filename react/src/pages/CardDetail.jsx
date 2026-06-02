@@ -3,10 +3,12 @@ import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Copy, ExternalLink, Loader2, Camera, Link2, Upload, X, Trash2, Pencil, RefreshCw } from "lucide-react";
 import { apiFetch, relTime } from "@/api";
 import { usePreferences } from "@/contexts/PreferencesContext";
-import { smoothPath } from "@/lib/chartUtils";
+import PriceHistoryChart from "@/components/charts/PriceHistoryChart";
 import { gradeBadgeClass } from "@/lib/gradeUtils";
 import { useCardDelete } from "@/hooks/useCardDelete";
 import { CardImage } from "@/components/CardImage";
+import RarityBadge from "@/components/RarityBadge";
+import { rarityTier } from "@/lib/rarityUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,79 +21,28 @@ function snapPrice(s) {
   return Number(s?.representativePrice ?? s?.avgPrice) || null;
 }
 
+// priceSource → 표시 라벨
+function priceSourceLabel(ps) {
+  switch (ps) {
+    case "psa_estimate": return "PSA 추정가";
+    case "last_sale":    return "마지막 거래가";
+    case "median":       return "중앙값";
+    default:             return "시세";
+  }
+}
+
 // ── SVG 차트 빌더 ─────────────────────────────────────────────
-const CHART = { W: 500, H: 180, PL: 54, PR: 24, PT: 20, PB: 30 };
-
-function buildTrend(history) {
-  if (!history || history.length < 2) return null;
-  const { W, H, PL, PR, PT, PB } = CHART;
-  const cW = W - PL - PR;
-  const cH = H - PT - PB;
-
-  const entries = history
-    .map((s, i) => ({ price: snapPrice(s), ts: s.fetchedAt, idx: i, snap: s }))
-    .filter((e) => e.price);
-  if (entries.length < 2) return null;
-
-  const prices = entries.map((e) => e.price);
+// 헤더 뱃지/범례용 가격 통계 (차트 자체는 <PriceHistoryChart>가 그림)
+function priceStats(history) {
+  const prices = (history || []).map(snapPrice).filter((p) => p);
+  if (prices.length < 2) return null;
   const minV = Math.min(...prices);
   const maxV = Math.max(...prices);
-  const range = maxV - minV || 1;
-
-  const coords = entries.map((e, i) => ({
-    x: PL + (i / (entries.length - 1)) * cW,
-    y: PT + cH - ((e.price - minV) / range) * cH,
-    price: e.price,
-    ts: e.ts,
-    snap: e.snap,
-  }));
-
-  const isUp = coords[coords.length - 1].price >= coords[0].price;
-  const trendColor = isUp ? "#D4AF37" : "#f44336";
-  const changePct = coords[0].price > 0
-    ? ((coords[coords.length - 1].price - coords[0].price) / coords[0].price) * 100
-    : 0;
-
-  const linePath = smoothPath(coords);
-  const last = coords[coords.length - 1];
-  const first = coords[0];
-  const areaPath = linePath
-    + ` L${last.x.toFixed(1)},${(PT + cH).toFixed(1)}`
-    + ` L${first.x.toFixed(1)},${(PT + cH).toFixed(1)} Z`;
-
-  // 최저/최고 좌표
-  const minIdx = prices.indexOf(minV);
-  const maxIdx = prices.indexOf(maxV);
-
-  // Y축 눈금 4단계
-  const yTicks = [0, 0.33, 0.67, 1].map((t) => ({
-    v: minV + t * range,
-    y: PT + cH - t * cH,
-  }));
-
-  // X축 눈금 — 날짜(M/D) 기준으로 dedup 후 최대 5개 균등 선택
-  const dateKey = (ts) => {
-    const d = new Date(ts);
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-  };
-  const seen = new Set();
-  const uniqueByDate = coords.filter((c) => {
-    const k = dateKey(c.ts);
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-  const xTickStep = Math.max(1, Math.ceil(uniqueByDate.length / 5));
-  const xTicks = uniqueByDate.filter((_, i) => i % xTickStep === 0 || i === uniqueByDate.length - 1)
-    .slice(0, 5);
-
-  return {
-    linePath, areaPath, trendColor, isUp, changePct,
-    minV, maxV, coords,
-    minCoord: coords[minIdx],
-    maxCoord: coords[maxIdx],
-    yTicks, xTicks,
-  };
+  const first = prices[0];
+  const last = prices[prices.length - 1];
+  const isUp = last >= first;
+  const changePct = first > 0 ? ((last - first) / first) * 100 : 0;
+  return { minV, maxV, isUp, changePct, trendColor: isUp ? "#d4af37" : "#f44336" };
 }
 
 // ── 상세 행 컴포넌트 ───────────────────────────────────────────
@@ -167,6 +118,11 @@ export default function CardDetail() {
   const [buyModalOpen, setBuyModalOpen] = useState(false);
   const [buyInput, setBuyInput] = useState("");
   const [buySaving, setBuySaving] = useState(false);
+  // 판매 모달
+  const [soldModalOpen, setSoldModalOpen] = useState(false);
+  const [soldPriceInput, setSoldPriceInput] = useState("");
+  const [soldDateInput, setSoldDateInput] = useState("");
+  const [soldSaving, setSoldSaving] = useState(false);
 
   // 라이트박스
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -174,15 +130,11 @@ export default function CardDetail() {
   // 시세 수집
   const [fetching, setFetching] = useState(false);
 
-  // 차트 hover 툴팁
-  const [hoverIdx, setHoverIdx] = useState(null);
-  const chartSvgRef = useRef(null);
-
   // 최신 스냅샷 메타 (신뢰도, priceSource 등) — 시세 수집 직후 / latest 호출 후 갱신
   const [latestMeta, setLatestMeta] = useState(null);
 
   async function handleFetchPrice(force = false) {
-    if (!force && !confirm("130point.com에서 최신 시세를 수집합니다.\n(ZenRows 포인트가 소모됩니다)")) return;
+    if (!force && !confirm("최신 시세를 수집합니다. (PSA 카드는 PSA 추정가 우선, 없으면 130point)\n(ZenRows 포인트가 소모됩니다)")) return;
     setFetching(true);
     try {
       const qs = force ? "?force=1" : "";
@@ -198,25 +150,32 @@ export default function CardDetail() {
         alert(`수집 실패: ${data.message || data.error}`);
         return;
       }
+      // _debug.rawHtml은 디버그(DEBUG_SCRAPE=1)일 때만 옴 — 콘솔에만 남기고 흐름은 계속.
       if (data._debug?.rawHtml) {
-        console.warn("[130point] 파싱 결과 없음. raw HTML:", data._debug.rawHtml);
-        alert("수집은 됐지만 가격 파싱에 실패했습니다.\n콘솔에서 raw HTML을 확인해 주세요.");
-        return;
+        console.warn("[scrape] 결과 없음, raw HTML(디버그):", data._debug.rawHtml);
       }
       const price = data.representativePrice ?? data.avgPrice;
+      const noPrice = price == null;
       setCard((prev) => ({ ...prev, currentPrice: price ?? prev.currentPrice }));
       setLatestMeta({
         confidence: data.confidence,
         priceSource: data.priceSource,
         lastSale: data.lastSale,
         filterStats: data.filterStats,
+        source: data.source,
+        estimateRange: data.estimateRange,
       });
       await loadHistory();
-      const sourceLabel = data.priceSource === "last_sale" ? "마지막 거래가" : "중앙값";
-      const conf = data.confidence?.level ?? "?";
-      alert(
-        `수집 완료!\n${sourceLabel} $${price ?? "—"} (${data.saleCount}건 · 신뢰도 ${conf})`
-      );
+      if (noPrice) {
+        // PSA 추정가도, 130point 거래내역도 없음 → 가격정보 없음
+        alert("가격 정보를 찾지 못했습니다.\n(PSA 추정가·130point 거래내역 모두 없음)");
+      } else {
+        const conf = data.confidence?.level ?? "?";
+        const cntStr = data.saleCount != null ? `${data.saleCount}건 · ` : "";
+        alert(
+          `수집 완료!\n${priceSourceLabel(data.priceSource)} $${price ?? "—"} (${cntStr}신뢰도 ${conf})`
+        );
+      }
     } catch (e) {
       alert("서버 통신 중 오류가 발생했습니다.");
       console.error(e);
@@ -229,7 +188,7 @@ export default function CardDetail() {
   async function toggleRareFlag() {
     const next = !card.isRare;
     const action = next ? "희소 카드(1/1·SSP)로 표시" : "일반 카드로 되돌리기";
-    if (!confirm(`${action}하시겠습니까?\n희소 카드는 자동 시세 수집이 차단됩니다.`)) return;
+    if (!confirm(`${action}하시겠습니까?`)) return;
     try {
       const res = await apiFetch(`/api/cards/${card.id}/rare-flag`, {
         method: "PATCH",
@@ -280,6 +239,8 @@ export default function CardDetail() {
           priceSource: last.priceSource,
           lastSale: last.lastSale,
           representativePrice: last.representativePrice,
+          source: last.source,
+          estimateRange: last.estimateRange,
         });
       }
     } catch (e) {
@@ -378,13 +339,53 @@ export default function CardDetail() {
     setBuyModalOpen(true);
   }
 
+  // 판매 등록 — 판매가/날짜 저장 → 카드가 SOLD 상태로 전환(보유·포트폴리오에서 제외, 실현손익 집계)
+  async function handleSold() {
+    const trimmed = soldPriceInput.trim().replace(/,/g, "");
+    if (trimmed === "" || isNaN(Number(trimmed))) { alert("판매가를 입력해 주세요."); return; }
+    const price = Number(trimmed);
+    setSoldSaving(true);
+    try {
+      const res = await apiFetch(`/api/cards/${card.id}/sold`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ soldPrice: price, soldAt: soldDateInput || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.message || "판매 등록에 실패했습니다."); return; }
+      setCard((prev) => ({ ...prev, soldAt: data.soldAt ?? new Date().toISOString(), soldPrice: price }));
+      setSoldModalOpen(false);
+    } catch {
+      alert("서버 통신 중 오류가 발생했습니다.");
+    } finally {
+      setSoldSaving(false);
+    }
+  }
+
+  async function handleUnsell() {
+    if (!confirm("판매를 취소하고 다시 보유 상태로 되돌릴까요?")) return;
+    try {
+      const res = await apiFetch(`/api/cards/${card.id}/unsell`, { method: "PATCH" });
+      if (!res.ok) { alert("판매 취소에 실패했습니다."); return; }
+      setCard((prev) => ({ ...prev, soldAt: null, soldPrice: null, soldNote: null }));
+    } catch {
+      alert("서버 통신 중 오류가 발생했습니다.");
+    }
+  }
+
+  function openSoldModal() {
+    setSoldPriceInput(card?.currentPrice != null ? String(card.currentPrice) : "");
+    setSoldDateInput(new Date().toISOString().slice(0, 10));
+    setSoldModalOpen(true);
+  }
+
   function openImgModal() {
     setImgUrl(card?.imageUrl?.startsWith("data:") ? "" : (card?.imageUrl || ""));
     setImgPreview(null);
     setImgModalOpen(true);
   }
 
-  const trend = useMemo(() => buildTrend(history), [history]);
+  const trend = useMemo(() => priceStats(history), [history]);
 
   const latestSnap = history[history.length - 1];
   const firstSnap  = history[0];
@@ -403,7 +404,14 @@ export default function CardDetail() {
     );
   }
 
-  const pop10 = card.psaPopulation?.Pop10 ?? card.psaPopulation?.pop10 ?? null;
+  // PSA Population — 등록(PSA API: PascalCase) / 시세수집(scrape) 양쪽 키를 모두 지원.
+  const popRaw = card.psaPopulation || {};
+  const totalPopNum = Number(popRaw.TotalPopulation ?? popRaw.totalPopulation ?? popRaw.Pop10 ?? popRaw.pop10);
+  const totalPop = Number.isFinite(totalPopNum) ? totalPopNum : null;
+  const popHigherNum = Number(popRaw.PopulationHigher ?? popRaw.populationHigher);
+  const popHigher = Number.isFinite(popHigherNum) ? popHigherNum : null;
+  const isPsaEstimate = latestMeta?.priceSource === "psa_estimate";
+  const rarity = rarityTier(card);
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -446,18 +454,34 @@ export default function CardDetail() {
           >
             {card.isRare ? "★ 희소" : "희소 카드?"}
           </button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => handleFetchPrice(false)}
-            disabled={fetching}
-            title="130point.com에서 시세 수집"
-            className="h-9 px-3 gap-1.5 text-xs"
-          >
-            {fetching
-              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />수집 중...</>
-              : <><RefreshCw className="w-3.5 h-3.5" />시세 수집</>}
-          </Button>
+          {card.soldAt ? (
+            <>
+              <span className="h-9 px-2.5 inline-flex items-center rounded-md text-[11px] font-bold bg-red-500/20 text-red-300 border border-red-500/40">
+                SOLD
+              </span>
+              <Button variant="secondary" size="sm" onClick={handleUnsell} title="판매 취소 (다시 보유)" className="h-9 px-3 gap-1.5 text-xs">
+                판매 취소
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" size="sm" onClick={openSoldModal} title="판매 등록" className="h-9 px-3 gap-1.5 text-xs">
+                판매
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleFetchPrice(false)}
+                disabled={fetching}
+                title="130point.com에서 시세 수집"
+                className="h-9 px-3 gap-1.5 text-xs"
+              >
+                {fetching
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />수집 중...</>
+                  : <><RefreshCw className="w-3.5 h-3.5" />시세 수집</>}
+              </Button>
+            </>
+          )}
           <Button
             variant="destructive"
             size="icon"
@@ -479,7 +503,7 @@ export default function CardDetail() {
           <div className="glass-card !p-3 flex flex-col gap-2">
             {/* 이미지 클릭 → 라이트박스 */}
             <div
-              className="group/img relative aspect-[5/7] rounded-xl overflow-hidden bg-[#0a0f1e] flex items-center justify-center cursor-zoom-in"
+              className={`group/img relative aspect-[5/7] rounded-xl overflow-hidden bg-[#0a0f1e] flex items-center justify-center cursor-zoom-in ${rarity ? `rarity-${rarity.tier}` : ""}`}
               onClick={() => card.imageUrl && setLightboxOpen(true)}
               title="크게 보기"
             >
@@ -488,6 +512,9 @@ export default function CardDetail() {
                 alt={card.subject}
                 className="w-full h-full object-contain transition-transform duration-300 group-hover/img:scale-105"
               />
+              {rarity && (
+                <RarityBadge card={card} className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 shadow-lg" />
+              )}
             </div>
 
             {/* 이미지 변경 버튼 — 하단 작게 */}
@@ -548,18 +575,31 @@ export default function CardDetail() {
           {/* 스탯 카드 */}
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
             <StatCard
-              label="Current Value"
-              value={card.currentPrice ? fmtMoney(card.currentPrice) : "—"}
+              label={card.soldAt ? "Realized P&L" : "Current Value"}
+              value={
+                card.soldAt
+                  ? (card.purchasePrice != null && card.soldPrice != null
+                      ? `${card.soldPrice - card.purchasePrice >= 0 ? "+" : ""}${fmtMoney(card.soldPrice - card.purchasePrice)}`
+                      : (card.soldPrice != null ? fmtMoney(card.soldPrice) : "—"))
+                  : (card.currentPrice ? fmtMoney(card.currentPrice) : "—")
+              }
               sub={
-                latestSnap
+                card.soldAt
+                  ? `판매가 ${card.soldPrice != null ? fmtMoney(card.soldPrice) : "—"} · ${relTime(card.soldAt)}`
+                  : latestSnap
                   ? `${relTime(latestSnap.fetchedAt)}${
-                      latestMeta?.priceSource === "last_sale" ? " · 마지막 거래가" : ""
+                      latestMeta?.priceSource ? ` · ${priceSourceLabel(latestMeta.priceSource)}` : ""
                     }`
+                  : undefined
+              }
+              color={
+                card.soldAt && card.purchasePrice != null && card.soldPrice != null
+                  ? (card.soldPrice - card.purchasePrice >= 0 ? "up" : "down")
                   : undefined
               }
               highlight
               badge={
-                latestMeta?.confidence ? (
+                !card.soldAt && latestMeta?.confidence ? (
                   <ConfidenceBadge
                     level={latestMeta.confidence.level}
                     reasons={latestMeta.confidence.reasons}
@@ -580,9 +620,9 @@ export default function CardDetail() {
               sub="수집 기간 내"
             />
             <StatCard
-              label="PSA Pop 10"
-              value={pop10 !== null ? pop10.toLocaleString() : "—"}
-              sub="동일 등급 개체수"
+              label={card.grade ? `PSA Pop ${card.grade}` : "PSA Pop"}
+              value={totalPop !== null ? totalPop.toLocaleString() : "—"}
+              sub={popHigher !== null ? `동일 등급 · 상위 ${popHigher.toLocaleString()}` : "동일 등급 개체수"}
             />
             {/* 구매가격 카드 — 클릭하여 편집 */}
             {(() => {
@@ -613,8 +653,26 @@ export default function CardDetail() {
             })()}
           </div>
 
-          {/* 낮은 신뢰도 안내 */}
-          {latestMeta?.confidence && ["LOW", "NONE"].includes(latestMeta.confidence.level) && (
+          {/* PSA Estimate 안내 */}
+          {isPsaEstimate && (
+            <div className="glass-card !p-3 border border-gold/30 bg-gold/5">
+              <div className="flex items-start gap-2">
+                <span className="text-gold text-sm leading-tight">◆</span>
+                <div className="flex-1 text-xs leading-relaxed">
+                  <p className="font-medium mb-0.5 text-gold">PSA Estimate · PSA 공식 추정가</p>
+                  <p className="text-white/60">
+                    {latestMeta.estimateRange &&
+                      `범위 ${fmtMoney(latestMeta.estimateRange.low)} ~ ${fmtMoney(latestMeta.estimateRange.high)}`}
+                    {latestMeta.confidence?.psaConfidence && <> · 신뢰도 {latestMeta.confidence.psaConfidence}</>}
+                    {totalPop !== null && <> · 동일 등급 {totalPop.toLocaleString()}개</>}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 낮은 신뢰도 안내 (130point 한정 — PSA 추정가는 위 배너로 대체) */}
+          {latestMeta?.confidence && !isPsaEstimate && ["LOW", "NONE"].includes(latestMeta.confidence.level) && (
             <div className="glass-card !p-3 border border-orange-500/30 bg-orange-500/10">
               <div className="flex items-start gap-2">
                 <span className="text-orange-300 text-sm leading-tight">⚠</span>
@@ -660,171 +718,11 @@ export default function CardDetail() {
 
             <div style={{ width: "100%", position: "relative" }}>
               {historyLoading ? (
-                <div className="flex items-center justify-center h-full text-white/20" style={{ height: 200 }}>
+                <div className="flex items-center justify-center text-white/20" style={{ height: 240 }}>
                   <Loader2 className="w-6 h-6 animate-spin" />
                 </div>
-              ) : trend ? (
-                <svg
-                  ref={chartSvgRef}
-                  viewBox={`0 0 ${CHART.W} ${CHART.H}`}
-                  preserveAspectRatio="xMidYMid meet"
-                  style={{ width: "100%", height: "auto", display: "block", overflow: "visible", cursor: "crosshair" }}
-                  onMouseMove={(e) => {
-                    const rect = chartSvgRef.current?.getBoundingClientRect();
-                    if (!rect) return;
-                    const svgX = ((e.clientX - rect.left) / rect.width) * CHART.W;
-                    let closest = 0;
-                    let minDist = Infinity;
-                    trend.coords.forEach((c, i) => {
-                      const d = Math.abs(c.x - svgX);
-                      if (d < minDist) { minDist = d; closest = i; }
-                    });
-                    setHoverIdx(closest);
-                  }}
-                  onMouseLeave={() => setHoverIdx(null)}
-                >
-                  <defs>
-                    <linearGradient id="cdg" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={trend.trendColor} stopOpacity="0.28" />
-                      <stop offset="100%" stopColor={trend.trendColor} stopOpacity="0" />
-                    </linearGradient>
-                    <filter id="cdGlow">
-                      <feGaussianBlur stdDeviation="2" result="blur" />
-                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                    </filter>
-                  </defs>
-
-                  {/* Y축 그리드 + 레이블 */}
-                  {trend.yTicks.map((tick, i) => (
-                    <g key={i}>
-                      <line
-                        x1={CHART.PL} y1={tick.y.toFixed(1)}
-                        x2={CHART.W - CHART.PR} y2={tick.y.toFixed(1)}
-                        stroke="rgba(255,255,255,0.06)" strokeWidth="1"
-                      />
-                      <text
-                        x={(CHART.PL - 6).toFixed(1)} y={tick.y.toFixed(1)}
-                        textAnchor="end" dominantBaseline="middle"
-                        fill="rgba(255,255,255,0.28)" fontSize="9"
-                        style={{ fontFamily: "Poppins, sans-serif" }}
-                      >
-                        {fmtMoney(tick.v)}
-                      </text>
-                    </g>
-                  ))}
-
-                  {/* X축 날짜 레이블 */}
-                  {trend.xTicks.map((tick, i) => {
-                    const d = new Date(tick.ts);
-                    const label = `${d.getMonth() + 1}/${d.getDate()}`;
-                    return (
-                      <text
-                        key={i}
-                        x={tick.x.toFixed(1)}
-                        y={(CHART.H - CHART.PB + 14).toFixed(1)}
-                        textAnchor="middle"
-                        fill="rgba(255,255,255,0.22)" fontSize="9"
-                        style={{ fontFamily: "Poppins, sans-serif" }}
-                      >
-                        {label}
-                      </text>
-                    );
-                  })}
-
-                  {/* 영역 채우기 */}
-                  <path d={trend.areaPath} fill="url(#cdg)" />
-
-                  {/* 라인 */}
-                  <path
-                    d={trend.linePath}
-                    fill="none"
-                    stroke={trend.trendColor}
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    filter="url(#cdGlow)"
-                  />
-
-                  {/* 최저가 마커 */}
-                  {trend.minCoord && trend.minV !== trend.maxV && (
-                    <g>
-                      <circle cx={trend.minCoord.x.toFixed(1)} cy={trend.minCoord.y.toFixed(1)} r="3.5" fill="#f44336" />
-                      <text
-                        x={trend.minCoord.x.toFixed(1)}
-                        y={(trend.minCoord.y + 13).toFixed(1)}
-                        textAnchor="middle" fill="#f44336" fontSize="8.5"
-                        style={{ fontFamily: "Poppins, sans-serif", fontWeight: 700 }}
-                      >
-                        L
-                      </text>
-                    </g>
-                  )}
-
-                  {/* 최고가 마커 */}
-                  {trend.maxCoord && trend.minV !== trend.maxV && (
-                    <g>
-                      <circle cx={trend.maxCoord.x.toFixed(1)} cy={trend.maxCoord.y.toFixed(1)} r="3.5" fill="#4caf50" />
-                      <text
-                        x={trend.maxCoord.x.toFixed(1)}
-                        y={(trend.maxCoord.y - 7).toFixed(1)}
-                        textAnchor="middle" fill="#4caf50" fontSize="8.5"
-                        style={{ fontFamily: "Poppins, sans-serif", fontWeight: 700 }}
-                      >
-                        H
-                      </text>
-                    </g>
-                  )}
-
-                  {/* 마지막 포인트 pulse dot */}
-                  {(() => {
-                    const last = trend.coords[trend.coords.length - 1];
-                    return (
-                      <g>
-                        <circle cx={last.x.toFixed(1)} cy={last.y.toFixed(1)} r="6" fill={trend.trendColor} opacity="0.2" />
-                        <circle cx={last.x.toFixed(1)} cy={last.y.toFixed(1)} r="3" fill={trend.trendColor} />
-                      </g>
-                    );
-                  })()}
-
-                  {/* hover 수직선 + 툴팁 */}
-                  {hoverIdx !== null && trend.coords[hoverIdx] && (() => {
-                    const c = trend.coords[hoverIdx];
-                    const snap = c.snap;
-                    const d = new Date(c.ts);
-                    const dateStr = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-                    const priceStr = fmtMoney(c.price);
-                    const tipW = 90, tipH = 32;
-                    const tipX = Math.max(CHART.PL, Math.min(c.x - tipW / 2, CHART.W - CHART.PR - tipW));
-                    const tipY = c.y < CHART.PT + 40 ? c.y + 10 : c.y - tipH - 8;
-                    return (
-                      <g>
-                        {/* 수직 크로스헤어 */}
-                        <line
-                          x1={c.x.toFixed(1)} y1={CHART.PT}
-                          x2={c.x.toFixed(1)} y2={(CHART.H - CHART.PB).toFixed(1)}
-                          stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="3 3"
-                        />
-                        {/* 교차점 dot */}
-                        <circle cx={c.x.toFixed(1)} cy={c.y.toFixed(1)} r="4" fill={trend.trendColor} />
-                        <circle cx={c.x.toFixed(1)} cy={c.y.toFixed(1)} r="7" fill={trend.trendColor} opacity="0.2" />
-                        {/* 툴팁 박스 */}
-                        <rect x={tipX} y={tipY} width={tipW} height={tipH} rx="5" fill="rgba(15,20,35,0.92)" stroke={trend.trendColor} strokeWidth="0.8" />
-                        <text x={tipX + tipW / 2} y={tipY + 12} textAnchor="middle" fill={trend.trendColor} fontSize="10" fontWeight="700" style={{ fontFamily: "Poppins, sans-serif" }}>
-                          {priceStr}
-                        </text>
-                        <text x={tipX + tipW / 2} y={tipY + 24} textAnchor="middle" fill="rgba(255,255,255,0.45)" fontSize="8" style={{ fontFamily: "Poppins, sans-serif" }}>
-                          {dateStr}
-                        </text>
-                      </g>
-                    );
-                  })()}
-                </svg>
               ) : (
-                <svg viewBox={`0 0 ${CHART.W} ${CHART.H}`} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: "auto", display: "block" }}>
-                  <text x="250" y="90" textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="13">
-                    시세 수집 후 차트가 표시됩니다
-                  </text>
-                </svg>
+                <PriceHistoryChart data={history} height={240} />
               )}
             </div>
           </div>
@@ -943,8 +841,54 @@ export default function CardDetail() {
               초기화
             </Button>
             <Button variant="secondary" onClick={() => setBuyModalOpen(false)}>취소</Button>
-            <Button onClick={handleBuySave} disabled={buySaving}>
+            <Button onClick={() => handleBuySave()} disabled={buySaving}>
               {buySaving ? <><Loader2 className="w-4 h-4 animate-spin" /> 저장 중...</> : "저장"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 판매 등록 모달 */}
+      <Dialog open={soldModalOpen} onOpenChange={setSoldModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>판매 등록</DialogTitle>
+            <DialogDescription>판매가와 날짜를 입력하세요 (USD). 판매하면 보유 목록·포트폴리오에서 빠지고 실현 손익으로 집계됩니다.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <label className="text-xs text-white/50 uppercase tracking-wider">판매가 (USD)</label>
+              <Input
+                type="number" min="0" step="0.01" placeholder="예: 300.00"
+                value={soldPriceInput}
+                onChange={(e) => setSoldPriceInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSold()}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-white/50 uppercase tracking-wider">판매일</label>
+              <Input type="date" value={soldDateInput} onChange={(e) => setSoldDateInput(e.target.value)} />
+            </div>
+            {soldPriceInput && card.purchasePrice != null && !isNaN(Number(soldPriceInput)) && (
+              <div className="rounded-xl bg-white/5 border border-white/10 p-3 flex items-center justify-between">
+                <span className="text-xs text-white/50">실현 손익</span>
+                {(() => {
+                  const gain = Number(soldPriceInput) - card.purchasePrice;
+                  const pct = (gain / card.purchasePrice * 100).toFixed(1);
+                  return (
+                    <span className={`text-sm font-bold ${gain >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {gain >= 0 ? "+" : ""}{fmtMoney(gain)} ({pct >= 0 ? "+" : ""}{pct}%)
+                    </span>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setSoldModalOpen(false)}>취소</Button>
+            <Button onClick={() => handleSold()} disabled={soldSaving}>
+              {soldSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> 저장 중...</> : "판매 등록"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -4,10 +4,9 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Collection from "./pages/Collection.jsx";
 import CardDetail from "./pages/CardDetail.jsx";
 import Gallery from "./pages/Gallery.jsx";
-import MarketTrends from "./pages/MarketTrends.jsx";
 import Settings from "./pages/Settings.jsx";
 import Hidden from "./pages/Hidden.jsx";
-import LlmTest from "./pages/LlmTest.jsx";
+import Assistant from "./pages/Assistant.jsx";
 
 export default function App() {
   return (
@@ -18,10 +17,9 @@ export default function App() {
         <Route path="/collection" element={<Collection />} />
         <Route path="/collection/:id" element={<CardDetail />} />
         <Route path="/gallery" element={<Gallery />} />
-        <Route path="/market-trends" element={<MarketTrends />} />
+        <Route path="/assistant" element={<Assistant />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/hidden" element={<Hidden />} />
-        <Route path="/llm-test" element={<LlmTest />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

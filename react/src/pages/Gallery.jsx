@@ -458,7 +458,7 @@ export default function Gallery() {
     setLoading(true);
     try {
       const [cardsR, sectionsR] = await Promise.allSettled([
-        apiJson("/api/cards"),
+        apiJson("/api/cards?status=all"), // 갤러리는 판매한 카드도 트로피로 유지
         apiJson("/api/gallery/sections"),
       ]);
       if (cardsR.status === "fulfilled") setCards(Array.isArray(cardsR.value) ? cardsR.value : []);

@@ -7,6 +7,8 @@ import {
 import { apiFetch, apiJson } from "@/api";
 import { usePreferences } from "@/contexts/PreferencesContext";
 import { gradeVariant, gradeBadgeClass } from "@/lib/gradeUtils";
+import { rarityTier } from "@/lib/rarityUtils";
+import RarityBadge from "@/components/RarityBadge";
 import { useCardDelete } from "@/hooks/useCardDelete";
 import { CardImage } from "@/components/CardImage";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,7 @@ function CardTile({ card, onDelete }) {
   const navigate = useNavigate();
   const { deleteCard, deleting } = useCardDelete({ onDelete });
   const { fmtMoney } = usePreferences();
+  const rarity = rarityTier(card);
 
   function handleCardClick() {
     navigate(`/collection/${card.id}`, { state: { card } });
@@ -40,7 +43,7 @@ function CardTile({ card, onDelete }) {
   return (
     <article
       onClick={handleCardClick}
-      className="group relative flex flex-col rounded-2xl overflow-hidden border border-white/10 bg-white/5 backdrop-blur-md hover:-translate-y-1 hover:border-gold/30 hover:shadow-lg hover:shadow-gold/10 transition-all duration-300 cursor-pointer"
+      className={`group relative flex flex-col rounded-2xl overflow-hidden border border-white/10 bg-white/5 backdrop-blur-md hover:-translate-y-1 hover:border-gold/30 hover:shadow-lg hover:shadow-gold/10 transition-all duration-300 cursor-pointer ${rarity ? `rarity-${rarity.tier}` : ""}`}
     >
       {/* 이미지 영역 */}
       <div className="relative aspect-[5/7] overflow-hidden bg-[#0a0f1e] flex items-center justify-center">
@@ -49,10 +52,14 @@ function CardTile({ card, onDelete }) {
           alt={card.subject || "card"}
           className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
         />
-        {/* 등급 뱃지 */}
+        {/* 등급 뱃지 — 좌상단 고정 */}
         <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-md text-xs font-black tracking-wide shadow-lg border ${gradeBadgeClass(card.grade)}`}>
           {card.grade || "N/A"}
         </div>
+        {/* 희소 뱃지 (PSA Population 기반) — 하단 중앙 (등급·삭제버튼과 분리) */}
+        {rarity && (
+          <RarityBadge card={card} className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 shadow-lg" />
+        )}
         {/* 삭제 버튼 */}
         <button
           onClick={(e) => deleteCard(card.id, card.subject, e)}
@@ -147,7 +154,7 @@ export default function Collection() {
   const loadCards = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiJson("/api/cards");
+      const data = await apiJson("/api/cards?status=active");
       setCards(Array.isArray(data) ? data : []);
       setLoadError(null);
     } catch (e) {

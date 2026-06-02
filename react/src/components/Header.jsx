@@ -1,13 +1,12 @@
 import { useLocation } from "react-router-dom";
 
 const titles = {
-  "/dashboard":     { title: "Dashboard",     crumb: "Home > Dashboard" },
-  "/collection":    { title: "My Collection", crumb: "Home > Collection" },
-  "/gallery":       { title: "Gallery",        crumb: "Home > Gallery" },
-  "/market-trends": { title: "Market Trends", crumb: "Home > Market Trends" },
-  "/settings":      { title: "Settings",      crumb: "Home > Settings" },
-  "/hidden":        { title: "Hidden",         crumb: "Home > Hidden" },
-  "/llm-test":      { title: "LLM Test",       crumb: "Home > LLM Test" },
+  "/dashboard":  { title: "Dashboard",     crumb: "Home > Dashboard" },
+  "/collection": { title: "My Collection", crumb: "Home > Collection" },
+  "/gallery":    { title: "Gallery",       crumb: "Home > Gallery" },
+  "/assistant":  { title: "AI Assistant",  crumb: "Home > AI Assistant" },
+  "/settings":   { title: "Settings",      crumb: "Home > Settings" },
+  "/hidden":     { title: "Sold / Archive", crumb: "Home > Sold / Archive" },
 };
 
 export default function Header() {
